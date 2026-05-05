@@ -7,12 +7,20 @@ from datetime import datetime
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.status import HTTP_303_SEE_OTHER
 
 # --- Хранилище и логика (без изменений) ---
 db = {}
 SECONDS_IN_24H = 86400
+
+
+def _is_ignored(issue: dict, now: float | None = None) -> bool:
+    if now is None:
+        now = time.time()
+    ignore_until = issue.get("ignore_until")
+    return ignore_until is not None and ignore_until > now
 
 
 async def cleanup_old_data():
@@ -22,7 +30,9 @@ async def cleanup_old_data():
             db[issue_id]["timestamps"] = [
                 ts for ts in db[issue_id]["timestamps"] if now - ts <= SECONDS_IN_24H
             ]
-            if not db[issue_id]["timestamps"]:
+            # Если issue замьючено, не удаляем его даже без событий,
+            # чтобы пользователь мог снять mute вручную.
+            if not db[issue_id]["timestamps"] and not _is_ignored(db[issue_id], now=now):
                 del db[issue_id]
         await asyncio.sleep(3600)
 
@@ -76,7 +86,16 @@ async def ingest_error(project_id: str, request: Request):
         now = time.time()
 
         if issue_id not in db:
-            db[issue_id] = {"type": exc_type, "value": exc_value, "timestamps": []}
+            db[issue_id] = {
+                "type": exc_type,
+                "value": exc_value,
+                "timestamps": [],
+                "ignore_until": None,
+            }
+
+        # Если issue заглушено, не учитываем новые события (не увеличиваем счётчики).
+        if _is_ignored(db[issue_id], now=now):
+            return {"id": "ignored"}
 
         db[issue_id]["timestamps"].append(now)
         db[issue_id]["latest_event"] = event_payload
@@ -180,7 +199,14 @@ async def dashboard():
         """
         return render_page("Dashboard - Micro Sentry", content)
 
-    sorted_issues = sorted(db.items(), key=lambda x: x[1]["last_seen"], reverse=True)
+    # Сначала не-замьюченные, потом замьюченные; внутри — по last_seen.
+    def _sort_key(item):
+        issue = item[1]
+        ignored = _is_ignored(issue)
+        last_seen = issue.get("last_seen", 0)
+        return (ignored, -last_seen)
+
+    sorted_issues = sorted(db.items(), key=_sort_key)
 
     # Стилизация списка под shadcn Table/Card
     content = """
@@ -196,8 +222,23 @@ async def dashboard():
 
     for i, (issue_id, data) in enumerate(sorted_issues):
         count = len(data["timestamps"])
-        last_seen_dt = datetime.fromtimestamp(data["last_seen"]).strftime("%H:%M, %b %d")
+        last_seen = data.get("last_seen")
+        last_seen_dt = (
+            datetime.fromtimestamp(last_seen).strftime("%H:%M, %b %d")
+            if last_seen
+            else "—"
+        )
         border_class = "border-b border-border" if i < len(sorted_issues) - 1 else ""
+        is_ignored = _is_ignored(data)
+        ignored_badge = ""
+        if is_ignored:
+            until = datetime.fromtimestamp(data["ignore_until"]).strftime("%H:%M")
+            ignored_badge = f"""
+                <div class="flex items-center gap-1 bg-muted text-muted-foreground text-xs font-medium px-2 py-0.5 rounded-full">
+                    <i data-lucide="bell-off" class="w-3 h-3"></i>
+                    muted until {until}
+                </div>
+            """
 
         content += f"""
         <a href="/issue/{issue_id}" class="flex items-start justify-between p-4 hover:bg-muted/50 transition-colors {border_class} group">
@@ -215,6 +256,7 @@ async def dashboard():
                     <i data-lucide="trending-up" class="w-3 h-3"></i>
                     {count} events
                 </div>
+                {ignored_badge}
                 <div class="text-xs text-muted-foreground flex items-center gap-1">
                     <i data-lucide="clock" class="w-3 h-3"></i> {last_seen_dt}
                 </div>
@@ -233,6 +275,13 @@ async def issue_details(issue_id: str):
     data = db[issue_id]
     latest = data["latest_event"]
     platform = latest.get("platform", "unknown")
+    is_ignored = _is_ignored(data)
+    ignore_until = data.get("ignore_until")
+    ignore_until_text = (
+        datetime.fromtimestamp(ignore_until).strftime("%H:%M, %b %d")
+        if ignore_until
+        else ""
+    )
 
     # Шапка (Header Card)
     content = f"""
@@ -252,6 +301,32 @@ async def issue_details(issue_id: str):
             </div>
             <h1 class="text-3xl font-bold tracking-tight text-destructive mb-2">{data['type']}</h1>
             <p class="font-mono text-sm bg-muted/50 p-3 rounded-md border border-border">{data['value']}</p>
+
+            <div class="mt-4 flex flex-wrap gap-2 items-center">
+                <form method="post" action="/issue/{issue_id}/ignore?minutes=15">
+                    <button class="inline-flex items-center rounded-md border border-border px-3 py-1.5 text-xs font-semibold hover:bg-muted/50 transition-colors">
+                        <span class="mr-2" aria-hidden="true">⏸</span> Игнорировать 15м
+                    </button>
+                </form>
+                <form method="post" action="/issue/{issue_id}/ignore?minutes=60">
+                    <button class="inline-flex items-center rounded-md border border-border px-3 py-1.5 text-xs font-semibold hover:bg-muted/50 transition-colors">
+                        <span class="mr-2" aria-hidden="true">⏸</span> Игнорировать 1ч
+                    </button>
+                </form>
+                <form method="post" action="/issue/{issue_id}/ignore?minutes=1440">
+                    <button class="inline-flex items-center rounded-md border border-border px-3 py-1.5 text-xs font-semibold hover:bg-muted/50 transition-colors">
+                        <span class="mr-2" aria-hidden="true">⏸</span> Игнорировать 24ч
+                    </button>
+                </form>
+                <form method="post" action="/issue/{issue_id}/unignore">
+                    <button class="inline-flex items-center rounded-md border border-border px-3 py-1.5 text-xs font-semibold hover:bg-muted/50 transition-colors">
+                        <span class="mr-2" aria-hidden="true">▶</span> Снять игнор
+                    </button>
+                </form>
+                <div class="text-xs text-muted-foreground">
+                    {"Muted until: " + ignore_until_text if is_ignored else "Not muted"}
+                </div>
+            </div>
         </div>
     </div>
     """
@@ -328,4 +403,21 @@ async def issue_details(issue_id: str):
         content += "</div>"
 
     return render_page(f"{data['type']} - Micro Sentry", content)
+
+
+@app.post("/issue/{issue_id}/ignore")
+async def ignore_issue(issue_id: str, minutes: int = 60):
+    if issue_id not in db:
+        return HTMLResponse("Issue not found", status_code=404)
+    minutes = max(1, min(minutes, 60 * 24 * 30))  # 1 мин .. 30 дней
+    db[issue_id]["ignore_until"] = time.time() + minutes * 60
+    return RedirectResponse(url=f"/issue/{issue_id}", status_code=HTTP_303_SEE_OTHER)
+
+
+@app.post("/issue/{issue_id}/unignore")
+async def unignore_issue(issue_id: str):
+    if issue_id not in db:
+        return HTMLResponse("Issue not found", status_code=404)
+    db[issue_id]["ignore_until"] = None
+    return RedirectResponse(url=f"/issue/{issue_id}", status_code=HTTP_303_SEE_OTHER)
 
