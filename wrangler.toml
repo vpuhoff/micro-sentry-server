@@ -1,0 +1,18 @@
+name = "micro-sentry"
+main = "src/index.ts"
+compatibility_date = "2026-05-03"
+
+[durable_objects]
+bindings = [
+  { name = "SENTRY_PROJECT", class_name = "SentryProject" },
+  { name = "PROJECT_REGISTRY", class_name = "ProjectRegistry" }
+]
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["SentryProject"]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["ProjectRegistry"]
+
