@@ -17,3 +17,12 @@ dist/
 build/
 *.egg-info/
 
+# Node / Wrangler
+node_modules/
+package-lock.json
+.wrangler/
+
+# Cursor / local temp
+.cursor/
+.DS_Store
+
