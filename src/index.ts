@@ -1,6 +1,7 @@
 import { SentryProject } from "./SentryProject";
 import { ProjectRegistry } from "./ProjectRegistry";
 import { renderCreateProject, renderDashboard, renderIssue, renderProjectPicker } from "./ui";
+import { FAVICON_SVG } from "./favicon";
 
 export { SentryProject };
 export { ProjectRegistry };
@@ -163,6 +164,14 @@ export default {
 
     const url = new URL(request.url);
     const path = url.pathname;
+
+    if ((path === "/favicon.svg" || path === "/favicon.ico") && request.method === "GET") {
+      // Serve SVG for both; modern browsers will use /favicon.svg via <link rel="icon">.
+      return withCors(
+        new Response(FAVICON_SVG, { headers: { "content-type": "image/svg+xml; charset=utf-8", "cache-control": "public, max-age=86400" } }),
+        request,
+      );
+    }
 
     // Sentry-compatible ingest (store endpoint):
     // POST /api/{project_id}/store/
@@ -363,6 +372,20 @@ export default {
       const stub = getProjectStub(env, projectId);
       await stub.fetch(`https://do/unignore?id=${encodeURIComponent(issueId)}`, { method: "POST" });
       return withCors(new Response(null, { status: 303, headers: { location: `/ui/${encodeURIComponent(projectId)}/issue/${encodeURIComponent(issueId)}` } }), request);
+    }
+
+    // POST /ui/{project}/delete-all
+    const uiDeleteAll = path.match(/^\/ui\/([^/]+)\/delete-all\/?$/);
+    if (uiDeleteAll && request.method === "POST") {
+      const resolved = await resolveProjectId(env, uiDeleteAll[1]);
+      if (!resolved) return withCors(new Response("Project not found", { status: 404 }), request);
+      const projectId = resolved.id;
+      const stub = getProjectStub(env, projectId);
+      await stub.fetch("https://do/delete-all", { method: "POST" });
+      return withCors(
+        new Response(null, { status: 303, headers: { location: `/ui/${encodeURIComponent(projectId)}/` } }),
+        request,
+      );
     }
 
     // POST /ui/{project}/issue/{issue_hash}/delete

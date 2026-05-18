@@ -45,6 +45,8 @@ export function renderPage(title: string, content: string): string {
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>${esc(title)}</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <link rel="alternate icon" href="/favicon.ico">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -119,6 +121,8 @@ export function renderPageWithFooter(title: string, content: string, footer: str
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>${esc(title)}</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <link rel="alternate icon" href="/favicon.ico">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -281,15 +285,24 @@ export function renderDashboard(projectId: string, issues: AggregatedIssue[], ds
       </a>`;
   }
 
+  const deleteAllConfirm = `Удалить все issues (${issues.length})? Это действие нельзя отменить.`;
+
   const content = `
     <div class="flex items-center justify-between mb-6">
       <div>
         <h1 class="text-2xl font-semibold tracking-tight">Issues</h1>
         <div class="text-xs text-muted-foreground mt-1">Project: <span class="font-mono">${esc(projectId)}</span></div>
       </div>
-      <span class="inline-flex items-center rounded-md border px-2.5 py-0.5 text-xs font-semibold bg-muted/50 text-muted-foreground">
-        Aggregated
-      </span>
+      <div class="flex items-center gap-2">
+        <form method="post" action="/ui/${encodeURIComponent(projectId)}/delete-all" onsubmit="return confirm(${JSON.stringify(deleteAllConfirm)});">
+          <button type="submit" class="inline-flex items-center rounded-md border border-border px-3 py-1.5 text-xs font-semibold bg-destructive text-destructive-foreground hover:opacity-90 transition-opacity">
+            <span class="mr-2" aria-hidden="true">🗑</span> Удалить все
+          </button>
+        </form>
+        <span class="inline-flex items-center rounded-md border px-2.5 py-0.5 text-xs font-semibold bg-muted/50 text-muted-foreground">
+          Aggregated
+        </span>
+      </div>
     </div>
     <div class="rounded-lg border border-border bg-card text-card-foreground shadow-sm overflow-hidden">
       <div class="flex flex-col">

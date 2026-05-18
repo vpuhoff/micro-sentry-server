@@ -134,6 +134,10 @@ export class SentryProject implements DurableObject {
       return this.deleteIssue(id);
     }
 
+    if (request.method === "POST" && pathname === "/delete-all") {
+      return this.deleteAllIssues();
+    }
+
     return json({ error: "not found" }, { status: 404 });
   }
 
@@ -311,6 +315,37 @@ export class SentryProject implements DurableObject {
     const key = `${ERR_PREFIX}${id}`;
     const existed = await this.state.storage.delete(key);
     return json({ ok: true, existed });
+  }
+
+  private async deleteAllIssues(): Promise<Response> {
+    let deleted = 0;
+    let startAfter: string | undefined = undefined;
+
+    while (true) {
+      const page = await this.state.storage.list({
+        prefix: ERR_PREFIX,
+        limit: 256,
+        startAfter,
+      });
+      if (page.size === 0) break;
+
+      const keys: string[] = [];
+      let lastKey: string | undefined = undefined;
+      for (const [key] of page.entries()) {
+        lastKey = key;
+        keys.push(key);
+      }
+
+      if (keys.length) {
+        await this.state.storage.delete(keys);
+        deleted += keys.length;
+      }
+
+      if (!lastKey || page.size < 256) break;
+      startAfter = lastKey;
+    }
+
+    return json({ ok: true, deleted });
   }
 }
 
